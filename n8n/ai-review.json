@@ -1,0 +1,377 @@
+{
+  "name": "AI Code Review",
+  "nodes": [
+    {
+      "id": "6b0c6f0e-6f3a-4c55-9a51-1f3d2c1a0001",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "6b0c6f0e-6f3a-4c55-9a51-1f3d2c1a0255",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-review",
+        "options": {}
+      }
+    },
+    {
+      "id": "6b0c6f0e-6f3a-4c55-9a51-1f3d2c1a0002",
+      "name": "Parse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        200,
+        0
+      ],
+      "parameters": {
+        "jsCode": "// 依嚴重度決定：none / low 只發「審查通過」通知；medium / high / 無法判讀 → 放到 PR 或 issue 並通知\n// Gitea 網址：留空就從 remote 網址推算（remote 要是 http/https）；用 SSH remote 時要填，例如 'https://git.example.com'\nconst GITEA = '';\n// label 名稱：同時列 Gitea「Default」和「Advanced」範本的名稱，repo 和組織裡都沒有的名稱 Gitea 會略過\nconst LABELS = {\n  always: ['ai-review', 'bug', 'Kind/Bug'],\n  資安: ['Kind/Security'],\n  業務規則: ['Compat/Breaking'],\n  high: ['Priority/High'],\n  medium: ['Priority/Medium'],\n};\nconst out = [];\nfor (const item of $input.all()) {\n  const b = item.json.body || {};\n  const review = String(b.review || '');\n  // 報告開頭是 <!-- SEVERITY: high --> 和 <!-- FINDINGS: high/資安 medium/正確性 --> 兩行註解\n  const m1 = review.match(/SEVERITY:\\s*(none|low|medium|high)\\b/i);\n  const severity = m1 ? m1[1].toLowerCase() : 'unknown';\n  const pass = severity === 'none' || severity === 'low';\n  const m = String(b.remote || '').match(/[:/]([^/:]+)\\/([^/]+?)(?:\\.git)?\\/?$/);\n  if (!m) throw new Error('無法從 remote 解析 owner/repo：' + b.remote);\n  const gitea = GITEA || (String(b.remote).match(/^(https?:\\/\\/.+?)\\/[^/]+\\/[^/]+?(?:\\.git)?\\/?$/) || [])[1];\n  if (!gitea) throw new Error('remote 不是 http(s) 網址，請在 Parse 節點填 GITEA：' + b.remote);\n  const repo = `${m[1]}/${m[2]}`;\n  const api = `${gitea}/api/v1/repos/${repo}`;\n  const branch = String(b.branch || '');\n  const sha = String(b.sha || '');\n  const base = String(b.base || '');\n  const commits = String(b.commits || '').trim();\n  const author = String(b.author || '');\n  const email = (author.match(/<([^>]+)>/) || [])[1] || '';\n  // 分類 label 只看 medium 以上的發現，避免 low 的「規則檔需更新」也被貼上 Compat/Breaking\n  const findings = (review.match(/FINDINGS:([^>]*)-->/) || [])[1] || '';\n  const cats = new Set([...findings.matchAll(/(?:high|medium)\\/(\\S+)/gi)].map(x => x[1]));\n  const labels = [...LABELS.always, ...[...cats].flatMap(c => LABELS[c] || []), ...(LABELS[severity] || LABELS.medium)];\n  // 通知用的摘要，例如「高 1（資安）、中 2（正確性、效能）」\n  const all = [...findings.matchAll(/(high|medium|low)\\/(\\S+)/gi)].map(x => [x[1].toLowerCase(), x[2]]);\n  const summary = [['high', '高'], ['medium', '中'], ['low', '低']].map(([s, zh]) => {\n    const c = all.filter(x => x[0] === s).map(x => x[1]);\n    return c.length ? `${zh} ${c.length}（${[...new Set(c)].join('、')}）` : '';\n  }).filter(Boolean).join('、') || '見報告';\n  const compareUrl = `${gitea}/${repo}/compare/${base}...${sha}`;\n  out.push({ json: {\n    pass,\n    summary,\n    compareUrl,\n    severity,\n    repo,\n    api,\n    branch,\n    sha,\n    email,\n    authorName: author,\n    giteaUser: String(b.giteaUser || '').trim(),\n    labels,\n    // ponytail: 只看前 50 筆開著的 PR，專案量大再改分頁\n    prsUrl: `${api}/pulls?state=open&limit=50`,\n    searchUrl: `${gitea}/api/v1/users/search?limit=5&q=${encodeURIComponent(email)}`,\n    title: `[AI Review][${severity}] ${branch} ${sha.slice(0, 8)}`,\n    body: [\n      `- 分支：\\`${branch}\\`（${commits ? commits.split('\\n').length : 0} 個 commit，比較：${compareUrl}）`,\n      `- push 的人：${author}`,\n      `- 審查引擎：${b.engine || ''}`,\n      '',\n      '<details><summary>這次審查的 commit</summary>',\n      '',\n      commits,\n      '',\n      '</details>',\n      '',\n      review,\n    ].join('\\n'),\n  } });\n}\nreturn out;\n"
+      }
+    },
+    {
+      "id": "6b0c6f0e-6f3a-4c55-9a51-1f3d2c1a0011",
+      "name": "Passed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        400,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "6b0c6f0e-6f3a-4c55-9a51-1f3d2c1a0012",
+              "leftValue": "={{ $json.pass }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "6b0c6f0e-6f3a-4c55-9a51-1f3d2c1a0003",
+      "name": "Find PR",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        600,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpBearerAuth": {
+          "name": "Gitea ai-review bot"
+        }
+      },
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Parse').item.json.prsUrl }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "6b0c6f0e-6f3a-4c55-9a51-1f3d2c1a0005",
+      "name": "Find author",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpBearerAuth": {
+          "name": "Gitea ai-review bot"
+        }
+      },
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Parse').item.json.searchUrl }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "6b0c6f0e-6f3a-4c55-9a51-1f3d2c1a0006",
+      "name": "Build",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        0
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// 決定結果放哪裡：分支有開著的 PR → 留 PR review；沒有 → 每次都開新 issue，指派給 push 的人\nconst p = $('Parse').item.json;\nconst list = r => (r && Array.isArray(r.body) ? r.body : []);\nconst pr = list($('Find PR').item.json).find(x => x.head && x.head.ref === p.branch);\nconst users = $json.body && Array.isArray($json.body.data) ? $json.body.data : [];\nconst hit = users.find(u => p.email && (u.email || '').toLowerCase() === p.email.toLowerCase())\n  || (p.email && users.length === 1 ? users[0] : null);\nconst assignee = p.giteaUser || (hit ? hit.login : '');\nconst body = `## AI Code Review：${p.severity}（${p.sha.slice(0, 8)}）\\n\\n${p.body}`;\nlet out;\nif (pr) {\n  // high 用「要求修改」；PR 作者剛好是 token 的帳號時 Gitea 不允許，失敗就改成一般留言\n  const postBody = { event: p.severity === 'high' ? 'REQUEST_CHANGES' : 'COMMENT', body };\n  out = { mode: 'pr', number: pr.number, link: pr.html_url, postUrl: `${p.api}/pulls/${pr.number}/reviews`,\n    postBody, fallbackBody: { ...postBody, event: 'COMMENT' } };\n} else {\n  // 指派的帳號沒有權限時建立會失敗，失敗就改成不指派\n  out = { mode: 'issue', number: 0, link: '', postUrl: `${p.api}/issues`,\n    postBody: { title: p.title, body, assignees: assignee ? [assignee] : [] },\n    fallbackBody: { title: p.title, body } };\n}\nreturn { json: { ...p, ...out, assignee } };\n"
+      }
+    },
+    {
+      "id": "6b0c6f0e-6f3a-4c55-9a51-1f3d2c1a0007",
+      "name": "Post to Gitea",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        0
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "name": "Gitea ai-review bot"
+        }
+      },
+      "onError": "continueErrorOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.postUrl }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.postBody) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "6b0c6f0e-6f3a-4c55-9a51-1f3d2c1a0008",
+      "name": "Post to Gitea (fallback)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        200
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "name": "Gitea ai-review bot"
+        }
+      },
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Build').item.json.postUrl }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('Build').item.json.fallbackBody) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "6b0c6f0e-6f3a-4c55-9a51-1f3d2c1a0009",
+      "name": "Add labels",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1600,
+        -120
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "name": "Gitea ai-review bot"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Build').item.json.api + '/issues/' + ($('Build').item.json.number || $json.number) + '/labels' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ labels: $('Build').item.json.labels }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "6b0c6f0e-6f3a-4c55-9a51-1f3d2c1a0014",
+      "name": "Notify",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        80
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// 組 Telegram 訊息（HTML 格式）。連結放在訊息文字裡，Gitea 只有 http 也點得開\n// Telegram 的 HTML 格式要把文字裡的 < > & 換成 HTML entity，連結網址裡的 \" 也要換\nconst esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\nconst name = a => a.replace(/\\s*<[^>]*>$/, '');   // 「王小明 <ming@x>」只留名字\nconst msg = (p, title, rows, linkText, link) => ({ telegram: {\n  text: [`<b>${esc(title)}</b>`, esc(`${p.repo} · ${p.branch} · ${p.sha.slice(0, 8)}`), '',\n    ...rows.map(([k, v]) => `${k}：${esc(v)}`), '', `<a href=\"${esc(link)}\">${esc(linkText)}</a>`].join('\\n'),\n  parse_mode: 'HTML',\n  link_preview_options: { is_disabled: true },\n} });\n\n// 審查通過：從 Passed? 直接過來，$json 是 Parse 的輸出\nif ($json.pass) {\n  const rows = [['push 的人', name($json.authorName)]];\n  if ($json.severity === 'low') rows.push(['備註', '有小建議，報告在 push 的人的電腦']);\n  return { json: msg($json, '✅ 審查通過', rows, '查看改動', $json.compareUrl) };\n}\n\n// 要處理：從 Post to Gitea 過來，$json 是 Gitea 的回應（PR review 或新 issue）\nconst b = $('Build').item.json;\nconst title = { high: '🔴 AI 審查：高風險', medium: '🟠 AI 審查：中風險' }[b.severity] || '⚠️ AI 審查：報告格式無法判讀';\nconst rows = [['結果', b.mode === 'pr' ? `已在 PR #${b.number} 留下審查` : `已開 issue #${$json.number}`], ['問題', b.summary]];\nif (b.mode === 'issue') {\n  rows.push(['指派', ($json.assignees || []).map(u => '@' + u.login).join(' ') || `未指派（${name(b.authorName)}）`]);\n}\nrows.push(['push 的人', name(b.authorName)]);\nconst linkText = b.mode === 'pr' ? `開啟 PR #${b.number}` : `開啟 issue #${$json.number}`;\nreturn { json: msg(b, title, rows, linkText, b.link || $json.html_url) };\n"
+      }
+    },
+    {
+      "id": "6b0c6f0e-6f3a-4c55-9a51-1f3d2c1a0010",
+      "name": "Telegram",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1800,
+        80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.telegram.org/botBOT_TOKEN/sendMessage",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: 'CHAT_ID', ...$json.telegram }) }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse": {
+      "main": [
+        [
+          {
+            "node": "Passed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Passed?": {
+      "main": [
+        [
+          {
+            "node": "Notify",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Find PR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find PR": {
+      "main": [
+        [
+          {
+            "node": "Find author",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find author": {
+      "main": [
+        [
+          {
+            "node": "Build",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build": {
+      "main": [
+        [
+          {
+            "node": "Post to Gitea",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post to Gitea": {
+      "main": [
+        [
+          {
+            "node": "Add labels",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Notify",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Post to Gitea (fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Post to Gitea (fallback)": {
+      "main": [
+        [
+          {
+            "node": "Add labels",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify": {
+      "main": [
+        [
+          {
+            "node": "Telegram",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
