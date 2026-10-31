@@ -1,5 +1,7 @@
 # ai-push-review
 
+[AI Code Review：用 Claude Code、Codex 訂閱在 git push 時自動審查](https://www.letswrite.tw/ai-push-review-blog/)
+
 `git push` 時，在背景用你自己訂閱的 Claude Code 或 Codex CLI 審查這個分支的改動，把結果留在自架 Gitea 的 PR 或 issue，並發 Telegram 通知。
 
 - 不用另外申請 API key，用個人訂閱的 `claude` 或 `codex` 指令跑審查
