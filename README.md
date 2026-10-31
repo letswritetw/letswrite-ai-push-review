@@ -50,7 +50,7 @@ n8n（n8n/ai-review.json）
 
 - **Git 2.54 以上**：要用 2.54 才有的「設定式 hook」（寫在 git 全域設定裡的 hook）。
   - Windows：安裝檔會試著用 winget 升級。
-  - mac：內建的 Apple Git 太舊，要用 Homebrew 裝的 git，安裝檔會試著執行 `brew install git`。
+  - mac：內建的 Apple Git 低於 2.54 時，要用 Homebrew 裝的 git，安裝檔會試著執行 `brew install git`。
 - **Claude Code 或 Codex CLI**：已經用訂閱帳號登入（`claude` 登入，或 `codex login`）。
 - **選用**：自架 Gitea、n8n、Telegram bot。沒有的話，報告只存在本機。
 
